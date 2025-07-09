@@ -1,0 +1,92 @@
+name: karen-us-female.yaml
+
+on:
+  push:
+    branches:
+      - en
+  workflow_dispatch:
+
+concurrency:
+  group: en-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  en:
+    if: github.repository_owner == 'csukuangfj'
+    runs-on: ${{ matrix.os }}
+    name: en ${{ matrix.index }}/${{ matrix.total }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        total: ["15"]
+        index: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          python3 -m pip install --upgrade sherpa-onnx soundfile
+
+      - name: Download tts model
+        shell: bash
+        run: |
+          curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2
+          tar xf kokoro-multi-lang-v1_0.tar.bz2
+          rm kokoro-multi-lang-v1_0.tar.bz2
+
+      - name: Run ${{ matrix.index }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 10
+          timeout_seconds: 3600
+          shell: bash
+          command: |
+            git config --global user.email "csukuangfj@gmail.com"
+            git config --global user.name "Fangjun Kuang"
+            d=$PWD
+
+            export GIT_LFS_SKIP_SMUDGE=1
+            export GIT_CLONE_PROTECTION_ACTIVE=false
+            if [ ! -d hf ]; then
+              git clone https://csukuangfj:$HF_TOKEN@huggingface.co/csukuangfj/synthetic-data hf
+            else
+              pushd hf
+              git pull
+              popd
+            fi
+
+            pushd hf
+            git config pull.rebase false
+            git lfs track "*.flac"
+            popd
+
+            i=${{ matrix.index }}
+
+            start=$(($i*428))
+            stop=$(($start+428))
+
+            for i in $(seq $start $stop); do
+              python3 ./english/generate_karen_us_female_tts_dataset.py \
+              --dest-data-dir $d/hf/english/kokoro-multi-lang-v1_0 \
+              --tts-model-dir $d/kokoro-multi-lang-v1_0/ \
+              --transcript ./english/karen-us-female-tts-dataset.csv \
+              --start $i \
+              --stop $(($i+1))
+
+              pushd hf
+              git pull
+              git add .
+              git commit -m 'add more audio'
+              git push https://csukuangfj:$HF_TOKEN@huggingface.co/csukuangfj/synthetic-data
+              popd
+            done
